@@ -5,7 +5,6 @@ A lightweight controller framework for Office.js Excel Add-ins, inspired by Stim
 > This library has not been released yet and is still under active development.
 > If you're interested in using it, please drop me a note [here](https://github.com/demsullivan/excelsius/issues/1)
 
-If you're interested
 ## Install
 
 Install via your favourite package manager. For example:
