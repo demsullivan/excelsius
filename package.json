@@ -1,0 +1,38 @@
+{
+  "name": "excelsius",
+  "version": "0.0.1",
+  "description": "A lightweight Stimulus.js-inspired framework for Office.js Excel Addins",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/demsullivan/excelsius.git"
+  },
+  "author": "Dave Sullivan",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/demsullivan/excelsius/issues"
+  },
+  "homepage": "https://github.com/demsullivan/excelsius#readme",
+  "dependencies": {
+    "@microsoft/office-js": "^1.1.91",
+    "lodash": "^4.17.21",
+    "moment": "^2.30.1",
+    "office-toolbox": "^0.3.0"
+  },
+  "devDependencies": {
+    "@tsconfig/node20": "^20.1.2",
+    "@types/lodash": "^4.17.0",
+    "@types/node": "^20.11.28",
+    "@types/office-js": "^1.0.377",
+    "@types/office-runtime": "^1.0.35",
+    "eslint": "^8.49.0",
+    "npm-run-all2": "^6.1.2",
+    "office-addin-debugging": "^5.0.17",
+    "prettier": "^3.0.3",
+    "typescript": "~5.4.0",
+    "vite": "^5.1.6"
+  }
+}
