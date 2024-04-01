@@ -37,9 +37,9 @@ export default class Application extends EventTarget {
 
       this.setupControllerConnections(context, namedItems)
 
-      worksheets.items.forEach(async (sheet: Excel.Worksheet) => {
-        this.setupControllerConnections(context, sheet.names)
-      })
+      await Promise.all(worksheets.items.map(async (sheet: Excel.Worksheet) => {
+        return this.setupControllerConnections(context, sheet.names)
+      }))
 
       await context.sync()
     })
@@ -49,7 +49,7 @@ export default class Application extends EventTarget {
     this.registeredControllers[name] = controller
 
     if (this.bindingMap[name]) {
-      this.bindingControllers[this.bindingMap[name]] = new controller()
+      this.bindingControllers[this.bindingMap[name]] = new controller(this, {})
     }
 
     Excel.run(async (context: Excel.RequestContext) => {
@@ -131,6 +131,7 @@ export default class Application extends EventTarget {
     event: Excel.WorksheetActivatedEventArgs
   ) {
     if (this.registeredControllers[controllerName]) {
+      console.debug(`activating ${controllerName}`);
       new this.registeredControllers[controllerName](this, event)
     }
   }

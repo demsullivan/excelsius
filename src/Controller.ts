@@ -1,20 +1,39 @@
 import _ from 'lodash'
 import type Application from './Application'
+import Context from './Context'
+import Binding, {BindingTarget, DataChangedEvent, SelectionChangedEvent} from "./Binding";
 
 type StringIndexedObject = {
   [key: string]: any
 }
 
+type InternalEventRecord = {
+  name: string;
+  listener: EventListener
+}
+
+export type TargetDefinition = string | { [name: string]: string }
+
+export type TaskPanePropsFunction = () => Object
+
+export type TaskPaneOptions = {
+  view: string,
+  props: StringIndexedObject | TaskPanePropsFunction;
+}
+
 export default class Controller {
   application: Application
-  element!: Excel.Worksheet | Excel.Workbook
+  element!: Excel.Worksheet | Excel.Workbook // | Excel.Range
+  internalEvents: InternalEventRecord[] = []
   excelEvents: OfficeExtension.EventHandlerResult<any>[] = []
 
-  events: string[] = []
-  bindings: string[] = []
+  targets: TargetDefinition[] = []
   values: string[] = []
-
+  events: string[] = []
+  bindings: Binding[]
   valueCache = {}
+
+  taskPane: TaskPaneOptions
 
   constructor(
     application: Application,
@@ -23,14 +42,23 @@ export default class Controller {
     this.application = application
 
     Excel.run(async (context: Excel.RequestContext) => {
-      if (event.type == 'WorkbookActivated') {
-        this.element = context.workbook.load()
-      } else if (event.type == 'WorksheetActivated') {
-        this.element = context.workbook.worksheets.getItem(event.worksheetId).load()
-      }
+
+      const {element, names} = await Context.sync(async ctx => {
+        let element
+
+        if (event.type == 'WorkbookActivated') {
+          element = context.workbook
+        } else if (event.type == 'WorksheetActivated') {
+          element = context.workbook.worksheets.getItem(event.worksheetId)
+        }
+
+        return {element, names: element.names}
+      });
+
+      this.element = element
 
       this.setupEventListeners()
-      this.setupBindings()
+      // await this.setupTargets()
       await this.setupValues()
 
       await context.sync()
@@ -38,7 +66,15 @@ export default class Controller {
       await this.connect()
 
       await context.sync()
+
+      this.updateTaskPane()
     })
+  }
+
+  dispatch(eventName: string, details: CustomEventInit = { detail: {} }) {
+    this.application.dispatchEvent(
+      new CustomEvent(`excelsius:${eventName}`, details)
+    );
   }
 
   setupEventListeners() {
@@ -47,13 +83,69 @@ export default class Controller {
     }
 
     this.events.forEach((eventName) => {
-      this.excelEvents.push(
-        this.element[`on${eventName}`].add(this.handleEvent.bind(this, eventName))
-      )
+      if (eventName.match(/^:/)) {
+        this.application.addEventListener(`excelsius${eventName}`, this.handleEvent.bind(this, eventName))
+        this.internalEvents.push(
+          {name: `excelsius${eventName}`, listener: this.handleEvent.bind(this, eventName)}
+        )
+      } else {
+        this.excelEvents.push(
+          this.element[`on${eventName}`].add(this.handleEvent.bind(this, eventName))
+        )
+      }
     })
   }
 
-  setupBindings() {}
+  async setupTargets() {
+    const namedItemTargets = <string[]>this.targets.filter(target => typeof target == "string")
+    const rangeTargets = this.targets.filter(target => typeof target != "string")
+
+    const namesAndTables = await Context.sync(async ctx => {
+      return [
+        ...namedItemTargets.map((target: string) => this.element.names.getItemOrNullObject(target)),
+        ...namedItemTargets.map((target: string) => this.element.tables.getItemOrNullObject(target))
+      ]
+    });
+
+    namesAndTables.forEach((name_or_table: Excel.NamedItem | Excel.Table) => {
+      if (name_or_table.isNullObject) return;
+
+      if (name_or_table instanceof Excel.NamedItem) {
+        this.createBinding(name_or_table.getRange(), name_or_table.name)
+      } else if (name_or_table instanceof Excel.Table) {
+        this.createBinding(name_or_table, name_or_table.name)
+      }
+    });
+
+    if (this.element instanceof Excel.Worksheet) {
+      const element = <Excel.Worksheet>this.element
+
+      rangeTargets.forEach((target: TargetDefinition) => {
+        Object.keys(target).forEach(name => {
+          this.createBinding(element.getRange(target[name]), name)
+        })
+      })
+    }
+  }
+
+  createBinding(target: BindingTarget, name: string) {
+    const binding = new Binding(target, name)
+
+    const dataChangedHandler = this[`${name}TargetDataChanged`]
+    const selectionChangedHandler = this[`${name}TargetSelectionChanged`]
+
+    if (dataChangedHandler !== undefined) {
+      binding.addEventListener('dataChanged', dataChangedHandler.bind(this))
+    }
+
+    if (selectionChangedHandler !== undefined) {
+      binding.addEventListener('selectionChanged', selectionChangedHandler.bind(this))
+    }
+
+    this[`${name}Target`] = binding
+
+    this.bindings.push(binding);
+  }
 
   async setupValues() {
     this.element.names.load()
@@ -109,34 +201,56 @@ export default class Controller {
     await this.disconnect()
 
     await new Promise<void>((resolve) => {
-      this.excelEvents.forEach((event) => {
-        Excel.run(event.context, async (context) => {
+      this.excelEvents.forEach(async (event) => {
+        await Excel.run(event.context, async (context) => {
           event.remove()
           await context.sync()
         })
       })
 
+      this.internalEvents.forEach((eventRecord: InternalEventRecord) => {
+        this.application.removeEventListener(eventRecord.name, eventRecord.listener)
+      });
+
+      this.bindings.forEach(async binding => await binding.destroy())
+
       this.excelEvents = []
+      this.internalEvents = []
+      this.bindings = []
 
       resolve()
     })
   }
 
   async handleEvent(eventName: string, event: any) {
-    const handler = this[`handle${eventName}`]
+    const handler = this[`handle${eventName.replace(/^:/, "")}`]
 
     if (handler) {
       handler.bind(this)(event)
     }
+
+    this.updateTaskPane()
   }
 
-  updateTaskPane(viewName: string, values: any) {
-    this.application.updateTaskPane(viewName, values)
+  updateTaskPane() {
+    let props
+
+    if (this.taskPane === undefined) return;
+
+    if (typeof this.taskPane.props == "function") {
+      props = this.taskPane.props.call(this)
+    } else {
+      props = this.taskPane.props
+    }
+
+    this.application.updateTaskPane(this.taskPane.view, props)
   }
 
-  async connect() {}
+  async connect() {
+  }
 
-  async disconnect() {}
+  async disconnect() {
+  }
 
   async fetch<T>(callback: (context: Excel.RequestContext) => any): Promise<T> {
     return await Excel.run(async (context: Excel.RequestContext) => {
